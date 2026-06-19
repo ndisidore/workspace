@@ -18,6 +18,79 @@ This package exposes a JavaScript module, not a CLI. It bundles three layers tha
 - Filesystem primitives under `src/fs/*` (`mkdir`, `writeFile`, `readFile`, `rm`, `readdir`, `stat`, `lstat`, `chmod`, `find`, `ls`, `grep`, `symlink`, `readlink`, `gc`, `watch`) operating on a `Database`.
 - `SQLiteWorkspaceProvider`, a `@platformatic/vfs` adapter that composes those primitives into a node-shaped filesystem (fd table, positional `readSync`/`writeSync`, `watchSync`, symlinks). This is what `wsd` mounts via FUSE.
 - Sync protocol building blocks operating on the same `Database`: `applyChanges`, `stageBlob`, `materialiseChange`, `coalesceChanges`, `fetchChanges`, `fetchObjects`, `hasObjects`, `pushObjects`, `buildManifest`, `currentRev`, `compareChangeCursors`, `readWatermark`/`writeWatermark`, `assertAppliedPushCursor`, and `DEFAULT_IGNORE`/`isIgnored`. The wire wiring lives in `@cloudflare/workspace-rpc`.
+- Push-based change events via `subscribeChanges`. The wire wiring lives in `@cloudflare/workspace-rpc`.
+
+## Change events
+
+`subscribeChanges(db, listener, options?)` delivers a push notification
+whenever the filesystem mutates, so external consumers can refresh a UI
+or trigger secondary work without polling.
+
+```ts
+import { subscribeChanges } from "@cloudflare/dofs";
+
+const unsubscribe = subscribeChanges(
+  db,
+  (batch) => {
+    for (const event of batch) {
+      // event.op is "create" | "modify" | "chmod" | "rename" |
+      // "delete" | "subtree" | "resync".
+      console.log(event.op, "path" in event ? event.path : "");
+    }
+  },
+  {
+    path: "/src", // scope (default "/")
+    recursive: true, // default true
+    ignore: ["**/node_modules/**", "*.log"], // glob or whole-segment
+    coalesceDirs: ["/node_modules"], // fold a noisy subtree to one event
+    window: 50, // batch window in ms (0 = synchronous, default)
+    maxBufferedEvents: 1000, // overflow → one "resync" marker
+  },
+);
+```
+
+Each event carries the `rev` it was stamped at. Events are decoupled
+from the sync wire's `ChangeEntry`: they carry lean `ChangeMeta` (type,
+mode, mtime, size, symlink target) rather than chunk hashes. A consumer
+that needs content reads it through the normal fs API or `fetchChanges`.
+
+Delivery is **best-effort and lives only for the current Durable Object
+incarnation.** Subscriptions are in-memory; they do not survive
+hibernation, and events emitted while a consumer is disconnected (or
+after a buffer overflow, signalled by a `resync` marker) are dropped.
+Emission is gated on subscriber presence, so the write path pays nothing
+when nobody is listening.
+
+### Handling `resync`
+
+A `resync` event means "some events were dropped; your view may be stale
+at or before `rev`." It is the deliberate trade that keeps push delivery
+from either blocking writes or buffering without bound under a burst.
+Recover by reconciling against the source of truth from your last-seen
+`rev`, then resume:
+
+```ts
+let lastRev = 0;
+const unsubscribe = subscribeChanges(db, (batch) => {
+  for (const event of batch) {
+    if (event.op === "resync") {
+      // Local store is authoritative here: re-read the watched scope.
+      // (Over the RPC boundary, call sync.fetchChanges({ after: lastRev })
+      // instead — see docs/04 → Change events.)
+      reconcile(db, lastRev);
+      lastRev = event.rev;
+      continue;
+    }
+    applyEvent(event);
+    lastRev = event.rev;
+  }
+});
+```
+
+This is the same routine a consumer needs after a reconnect or
+hibernation, so it is one code path, not a special case. See
+[`docs/04_filesystem_interface.md` → Change events](../../docs/04_filesystem_interface.md#change-events)
+for the full contract.
 
 Minimal DO-side usage — initialize the schema; the `Database` becomes the handle every other helper takes:
 

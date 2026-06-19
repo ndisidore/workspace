@@ -1,4 +1,5 @@
 import { createWorkspaceError } from "../errors.js";
+import { publishChange } from "../events.js";
 import { canonicalizePath } from "../path.js";
 import { incrementRev } from "../rev.js";
 import { ROOT_INODE } from "../schema/index.js";
@@ -76,5 +77,8 @@ export function link(db: Database, existingPath: string, newPath: string): void 
     );
     const rev = incrementRev(db);
     db.run("UPDATE vfs_nodes SET rev = ? WHERE inode = ?", rev, source.inode);
+    // A new hardlink name is a create from a consumer's point of view:
+    // a fresh dirent appeared at canonicalNew for an existing inode.
+    publishChange(db, { op: "create", path: canonicalNew });
   });
 }

@@ -1,4 +1,5 @@
 import { createWorkspaceError } from "../errors.js";
+import { publishChange } from "../events.js";
 import { canonicalizePath } from "../path.js";
 import { incrementRev } from "../rev.js";
 import type { Database } from "../storage.js";
@@ -30,5 +31,6 @@ export function chmod(db: Database, path: string, mode: number, now: () => numbe
       rev,
       node.inode,
     );
+    publishChange(db, { op: "chmod", path: canonical });
   });
 }

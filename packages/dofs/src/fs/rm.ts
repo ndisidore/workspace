@@ -1,4 +1,5 @@
 import { createWorkspaceError } from "../errors.js";
+import { publishChange } from "../events.js";
 import { canonicalizePath } from "../path.js";
 import { incrementRev } from "../rev.js";
 import type { Database } from "../storage.js";
@@ -122,6 +123,7 @@ export function rm(db: Database, path: string, options: RmOptions): void {
       // real path so sync sees the move-aware location.
       removeEntry(db, realPath, node.inode, node.type);
       recordDelete(db, rev, realPath);
+      publishChange(db, { op: "delete", path: realPath });
       return;
     }
 
@@ -132,6 +134,7 @@ export function rm(db: Database, path: string, options: RmOptions): void {
     for (const entry of walkPostOrder(db, node.inode, realPath)) {
       removeEntry(db, entry.path, entry.inode, entry.type);
       recordDelete(db, rev, entry.path);
+      publishChange(db, { op: "delete", path: entry.path });
     }
   });
 }

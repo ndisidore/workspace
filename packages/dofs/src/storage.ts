@@ -1,8 +1,14 @@
+import { ChangeBus } from "./events.js";
 import type { DurableObjectStorageLike, SQLStorageLike } from "./types.js";
 
 export class Database {
   readonly sql: SQLStorageLike;
   readonly transactionSync: <T>(closure: () => T) => T;
+  // Push-based change-event bus. Mutation primitives queue descriptors
+  // via publishChange(); they flush to subscribers when the outer
+  // transaction commits and are dropped on rollback. Empty and inert
+  // until something subscribes.
+  readonly changeBus = new ChangeBus();
   // Depth counter so reentrant transactionSync() calls work. The
   // outer call uses the storage adapter's transactionSync (or
   // BEGIN/COMMIT under the hood); nested calls use SAVEPOINTs
@@ -16,8 +22,11 @@ export class Database {
       if (this.#txDepth > 0) {
         // Reentrant call: use a savepoint. SQLite's RELEASE on a
         // savepoint inside an outer transaction commits the inner
-        // work without ending the outer one.
+        // work without ending the outer one. The change-event mark
+        // lets a rolled-back savepoint drop exactly the events it
+        // queued while keeping committed siblings.
         const sp = `_t${this.#txDepth}`;
+        const changeMark = this.changeBus.mark();
         this.sql.exec(`SAVEPOINT ${sp}`);
         this.#txDepth++;
         try {
@@ -27,35 +36,49 @@ export class Database {
         } catch (error) {
           this.sql.exec(`ROLLBACK TO ${sp}`);
           this.sql.exec(`RELEASE ${sp}`);
+          this.changeBus.rollbackTo(changeMark);
           throw error;
         } finally {
           this.#txDepth--;
         }
       }
       // Outer call: hand off to the storage adapter so the DO
-      // runtime's transaction semantics apply.
+      // runtime's transaction semantics apply. Change events queued
+      // during the closure flush only once this outermost transaction
+      // commits; a throw discards them.
       this.#txDepth++;
+      let committed = false;
       try {
-        if (storage.transactionSync !== undefined) {
-          return storage.transactionSync(closure);
-        }
-        if (storage.transaction !== undefined) {
-          const result = storage.transaction(closure);
-          if (
-            result !== undefined &&
-            result !== null &&
-            typeof result === "object" &&
-            "then" in result
-          ) {
-            throw new Error("Durable Object storage adapter requires synchronous transactions");
-          }
-          return result;
-        }
-        return closure();
+        const result = this.#runOuter(storage, closure);
+        committed = true;
+        return result;
       } finally {
         this.#txDepth--;
+        if (this.#txDepth === 0) {
+          if (committed) this.changeBus.commit(this);
+          else this.changeBus.discard();
+        }
       }
     };
+  }
+
+  #runOuter<T>(storage: DurableObjectStorageLike, closure: () => T): T {
+    if (storage.transactionSync !== undefined) {
+      return storage.transactionSync(closure);
+    }
+    if (storage.transaction !== undefined) {
+      const result = storage.transaction(closure);
+      if (
+        result !== undefined &&
+        result !== null &&
+        typeof result === "object" &&
+        "then" in result
+      ) {
+        throw new Error("Durable Object storage adapter requires synchronous transactions");
+      }
+      return result;
+    }
+    return closure();
   }
 
   run(query: string, ...bindings: unknown[]): void {

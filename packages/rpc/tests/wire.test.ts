@@ -288,6 +288,92 @@ describe("SyncRPC pull convergence", () => {
 
 import { createWorkspaceError } from "@cloudflare/dofs";
 
+describe("watchChanges over a real WebSocket", () => {
+  let harness: Harness | undefined;
+  afterEach(async () => {
+    await harness?.close();
+    harness = undefined;
+  });
+
+  it("pushes change events from server to client", async () => {
+    harness = await startHarness();
+    const client = createSyncClient({ url: harness.url });
+    try {
+      // window:0 delivers one batch per committing transaction, so the
+      // single write below arrives as one create event.
+      const { stream } = await client.watchChanges({ window: 0 });
+      const reader = stream.getReader();
+      try {
+        const provider = new SQLiteWorkspaceProvider(harness.db, { now: () => 4321 });
+        provider.writeFileSync("/hello.txt", "hi");
+        const { value: batch } = await reader.read();
+        expect(batch).toBeDefined();
+        const event = batch?.find((e) => "path" in e && e.path === "/hello.txt");
+        expect(event).toMatchObject({ op: "create", path: "/hello.txt" });
+      } finally {
+        await reader.cancel();
+        reader.releaseLock();
+      }
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("fans out to multiple concurrent clients", async () => {
+    harness = await startHarness();
+    const a = createSyncClient({ url: harness.url });
+    const b = createSyncClient({ url: harness.url });
+    try {
+      const [ra, rb] = await Promise.all([
+        a.watchChanges({ window: 0 }).then((r) => r.stream.getReader()),
+        b.watchChanges({ window: 0 }).then((r) => r.stream.getReader()),
+      ]);
+      try {
+        const provider = new SQLiteWorkspaceProvider(harness.db, { now: () => 1111 });
+        provider.mkdirSync("/shared", {});
+        const [batchA, batchB] = await Promise.all([ra.read(), rb.read()]);
+        expect(batchA.value?.[0]).toMatchObject({ op: "create", path: "/shared" });
+        expect(batchB.value?.[0]).toMatchObject({ op: "create", path: "/shared" });
+      } finally {
+        await ra.cancel();
+        await rb.cancel();
+        ra.releaseLock();
+        rb.releaseLock();
+      }
+    } finally {
+      await a.close();
+      await b.close();
+    }
+  });
+
+  it("releases the server-side subscription when the client disconnects", async () => {
+    harness = await startHarness();
+    const client = createSyncClient({ url: harness.url });
+    const { stream } = await client.watchChanges({ window: 0 });
+    const reader = stream.getReader();
+    // Drive one event so the subscription is unambiguously live before
+    // the drop.
+    const provider = new SQLiteWorkspaceProvider(harness.db, { now: () => 1 });
+    provider.mkdirSync("/x", {});
+    await reader.read();
+    expect(harness.db.changeBus.hasSubscribers).toBe(true);
+
+    // Drop the session WITHOUT an explicit reader.cancel(): a real
+    // disconnect (hibernation, network loss, process exit) never sends
+    // a clean cancel. The server must still release the subscription
+    // rather than leak it — and keep paying materialise on every commit
+    // — for the life of the incarnation.
+    reader.releaseLock();
+    await client.close();
+
+    const start = Date.now();
+    while (harness.db.changeBus.hasSubscribers && Date.now() - start < 2000) {
+      await new Promise((res) => setTimeout(res, 25));
+    }
+    expect(harness.db.changeBus.hasSubscribers).toBe(false);
+  });
+});
+
 describe("WireError propagation", () => {
   let harness: Harness | undefined;
   afterEach(async () => {

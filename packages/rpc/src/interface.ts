@@ -17,7 +17,12 @@
 // WorkspaceRPC, so the wire stub exposes one stable surface while
 // the two halves stay internally separable.
 
-import type { ChangeCursor, ChangeEntry } from "@cloudflare/dofs";
+import type {
+  ChangeCursor,
+  ChangeEntry,
+  ChangeEvent,
+  SubscribeChangesOptions,
+} from "@cloudflare/dofs";
 
 export interface SyncRPC {
   // DO → container. Stream a coalesced batch of changes. Bytes are
@@ -73,6 +78,27 @@ export interface SyncRPC {
   // that don't want to drive the full fetchChanges stream just
   // to look up one path.
   readEntry(path: string): Promise<ChangeEntry | null>;
+
+  // Container ← DO. Subscribe to a live, push-based stream of file
+  // change events. Each item is a coalesced batch of ChangeEvents
+  // (create / modify / chmod / rename / delete), plus `subtree`
+  // markers when the caller opts into coalesceDirs and a `resync`
+  // marker when the server's per-subscriber buffer overflows.
+  //
+  // Delivery is best-effort and scoped to the current DO incarnation:
+  // the subscription does not survive hibernation, and events emitted
+  // while the consumer is disconnected (or dropped on overflow) are
+  // lost. Each event carries the rev it was stamped at; a consumer
+  // that sees a `resync` marker — or reconnects — recovers by pulling
+  // from its last-seen rev through fetchChanges, then resumes.
+  //
+  // The returned stream is long-lived: it closes only when the caller
+  // cancels it or the session drops. The caller owns the result
+  // envelope and must dispose it (the stream's cancel unsubscribes on
+  // the server).
+  watchChanges(input?: SubscribeChangesOptions): Promise<{
+    stream: ReadableStream<ChangeEvent[]>;
+  }>;
 
   hasObjects(hashes: Uint8Array[]): Promise<Uint8Array[]>;
 

@@ -99,7 +99,9 @@ export function createWatcher(
   return emitter;
 }
 
-function isInScope(
+// Exported so the push-based change emitter (src/events.ts) can apply
+// the same directory-scope semantics the polling watcher uses.
+export function isInScope(
   entryPath: string,
   watchedPath: string,
   prefix: string,

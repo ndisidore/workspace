@@ -1,3 +1,4 @@
+import { publishChange } from "../events.js";
 import { mkdir } from "../fs/mkdir.js";
 import { readOnlyRootFor } from "../fs/mount-guard.js";
 import { resolveInode } from "../fs/resolve.js";
@@ -148,6 +149,12 @@ function removeInodeTreeAtPath(db: Database, path: string, inode: number, type: 
     // keeps the file alive. (parent, name) is unique, so this removes
     // exactly the dirent the walk is visiting.
     unlinkDirent(db, current.parentInode, current.name, current.inode, current.type);
+    // No tombstone (the incoming entry is authoritative for sync), but
+    // a change-event subscriber still needs to learn the dirent went
+    // away. The descriptor flushes with the replacement write that
+    // follows this structural cleanup; on the root path a later create
+    // descriptor coalesces the delete into a create.
+    publishChange(db, { op: "delete", path: current.path });
   }
 }
 
@@ -199,6 +206,10 @@ function applyDirectoryEntry(db: Database, entry: Extract<ChangeEntry, { kind: "
       rev,
       existing.inode,
     );
+    // A raw metadata update bypasses the fs primitives, so emit the
+    // change-event ourselves: an upstream mode change on an existing
+    // directory is a chmod from a subscriber's point of view.
+    publishChange(db, { op: "chmod", path: entry.path });
   });
 }
 

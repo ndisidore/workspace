@@ -17,9 +17,13 @@
 
 export type {
   ApplyResult,
+  ChangeEvent,
+  ChangeListener,
+  ChangeMeta,
   DurableObjectStorageLike,
   SkippedEntry,
   SQLiteWorkspaceProviderOptions,
+  SubscribeChangesOptions,
 } from "@cloudflare/dofs";
 export { SQLiteWorkspaceProvider } from "@cloudflare/dofs";
 export type { BackendHandle, WorkspaceBackend } from "./backend.js";

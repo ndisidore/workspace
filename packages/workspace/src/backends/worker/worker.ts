@@ -306,6 +306,7 @@ function noopSync(): SyncRPC {
   return {
     push: () => refuse("push") as never,
     fetchChanges: () => refuse("fetchChanges") as never,
+    watchChanges: () => refuse("watchChanges") as never,
     readEntry: () => refuse("readEntry") as never,
     hasObjects: () => refuse("hasObjects") as never,
     fetchObjects: () =>

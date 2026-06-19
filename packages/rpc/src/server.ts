@@ -8,6 +8,7 @@ import {
   applyChangesSync,
   type ChangeCursor,
   type ChangeEntry,
+  type ChangeEvent,
   coalesceChanges,
   compareChangeCursors,
   currentRev,
@@ -18,7 +19,9 @@ import {
   materialiseChange,
   readFetchCursor,
   readWatermark,
+  type SubscribeChangesOptions,
   stageBlob,
+  subscribeChanges,
   writeFetchCursor,
 } from "@cloudflare/dofs";
 import { newWebSocketRpcSession, nodeHttpBatchRpcResponse, RpcTarget } from "capnweb";
@@ -185,6 +188,12 @@ class SyncRPCServer extends RpcTarget implements SyncRPC {
     };
   }
 
+  async watchChanges(input: SubscribeChangesOptions = {}): Promise<{
+    stream: ReadableStream<ChangeEvent[]>;
+  }> {
+    return { stream: changeEventStream(this.db, clampWatchOptions(input)) };
+  }
+
   async readEntry(path: string): Promise<ChangeEntry | null> {
     return materialiseChange(this.db, path);
   }
@@ -343,6 +352,99 @@ export function serveHTTPBatch(
   rpc: SyncRPC | ShellRPC | WorkspaceRPC,
 ): Promise<void> {
   return nodeHttpBatchRpcResponse(request, response, rpc as unknown as RpcTarget);
+}
+
+// Hard bounds for the wire-facing knobs. `SubscribeChangesOptions` is
+// the wire input, so an untrusted client could otherwise pin a huge
+// per-subscriber buffer (server memory) or a long window (delivery
+// latency). Clamp the resource knobs into a sane range and apply the
+// producer-side defaults that keep a busy workspace (npm install, rm
+// -rf) coalescing instead of flooding the wire.
+const MAX_WATCH_WINDOW_MS = 60_000;
+const MAX_WATCH_BUFFERED_EVENTS = 10_000;
+const DEFAULT_WATCH_WINDOW_MS = 50;
+const DEFAULT_WATCH_BUFFERED_EVENTS = 1000;
+
+export function clampWatchOptions(input: SubscribeChangesOptions = {}): SubscribeChangesOptions {
+  const window = clamp(input.window ?? DEFAULT_WATCH_WINDOW_MS, 0, MAX_WATCH_WINDOW_MS);
+  const maxBufferedEvents = clamp(
+    input.maxBufferedEvents ?? DEFAULT_WATCH_BUFFERED_EVENTS,
+    1,
+    MAX_WATCH_BUFFERED_EVENTS,
+  );
+  return { ...input, window, maxBufferedEvents };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (Number.isNaN(value)) return min;
+  return Math.min(Math.max(value, min), max);
+}
+
+// Bridge the push-based change-event bus to a pull-based capnweb
+// ReadableStream. The dofs subscriber already coalesces and windows
+// events and collapses bursts to a `resync` marker; this layer adds a
+// bounded backlog of *batches* so a stalled consumer can't grow the
+// queue without limit — on overflow the backlog collapses to a single
+// resync batch carrying the latest rev seen. The subscription is
+// released when the consumer cancels the stream (disconnect, dispose,
+// or explicit cancel), so it never outlives its reader.
+function changeEventStream(
+  db: Database,
+  options: SubscribeChangesOptions,
+  maxQueuedBatches = 256,
+): ReadableStream<ChangeEvent[]> {
+  const queue: ChangeEvent[][] = [];
+  // Settles an outstanding pull(). A batch enqueues and resolves; an
+  // undefined argument (cancel) just resolves, so the pull promise can
+  // never dangle unsettled and hold the stream controller alive.
+  let pendingPull: ((batch: ChangeEvent[] | undefined) => void) | undefined;
+  let lastRev = 0;
+  let unsubscribe: (() => void) | undefined;
+
+  const onBatch = (batch: ChangeEvent[]): void => {
+    for (const event of batch) {
+      if (event.rev > lastRev) lastRev = event.rev;
+    }
+    if (pendingPull !== undefined) {
+      const resolve = pendingPull;
+      pendingPull = undefined;
+      resolve(batch);
+      return;
+    }
+    queue.push(batch);
+    if (queue.length > maxQueuedBatches) {
+      queue.length = 0;
+      queue.push([{ op: "resync", rev: lastRev }]);
+    }
+  };
+
+  return new ReadableStream<ChangeEvent[]>({
+    start() {
+      unsubscribe = subscribeChanges(db, onBatch, options);
+    },
+    pull(controller) {
+      const batch = queue.shift();
+      if (batch !== undefined) {
+        controller.enqueue(batch);
+        return;
+      }
+      return new Promise<void>((resolve) => {
+        pendingPull = (next) => {
+          if (next !== undefined) controller.enqueue(next);
+          resolve();
+        };
+      });
+    },
+    cancel() {
+      if (pendingPull !== undefined) {
+        const resolve = pendingPull;
+        pendingPull = undefined;
+        resolve(undefined);
+      }
+      queue.length = 0;
+      unsubscribe?.();
+    },
+  });
 }
 
 function iterableToReadableStream<T>(it: AsyncIterable<T>): ReadableStream<T> {

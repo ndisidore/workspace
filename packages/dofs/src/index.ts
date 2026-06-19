@@ -1,5 +1,16 @@
 export type { WorkspaceErrorCode, WorkspaceFsError } from "./errors.js";
 export { createWorkspaceError } from "./errors.js";
+// Push-based file change events. subscribeChanges registers an
+// in-incarnation listener; mutations publish create/modify/chmod/
+// rename/delete events, with opt-in directory coalescing and a
+// resync marker on buffer overflow. See src/events.ts.
+export type {
+  ChangeEvent,
+  ChangeListener,
+  ChangeMeta,
+  SubscribeChangesOptions,
+} from "./events.js";
+export { subscribeChanges } from "./events.js";
 export { chmod } from "./fs/chmod.js";
 export {
   WorkspaceFilesystem,

@@ -1,4 +1,5 @@
 import { createWorkspaceError } from "../errors.js";
+import { publishChange } from "../events.js";
 import { canonicalizePath } from "../path.js";
 import { incrementRev } from "../rev.js";
 import type { Database } from "../storage.js";
@@ -153,6 +154,10 @@ export function rename(db: Database, oldPath: string, newPath: string): void {
       db.run("UPDATE vfs_nodes SET rev = ? WHERE inode = ?", rev, entry.inode);
       recordDelete(db, rev, entry.path);
     }
+    // A rename surfaces as a single first-class event carrying both
+    // endpoints, not the per-path delete/create the sync wire records.
+    // A consumer learns the moved subtree's root moved and re-reads it.
+    publishChange(db, { op: "rename", from: oldRealPath, to: newRealPath });
   });
 }
 

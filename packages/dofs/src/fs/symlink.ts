@@ -1,4 +1,5 @@
 import { createWorkspaceError } from "../errors.js";
+import { publishChange } from "../events.js";
 import { canonicalizePath } from "../path.js";
 import { incrementRev } from "../rev.js";
 import { ROOT_INODE } from "../schema/index.js";
@@ -72,5 +73,6 @@ export function symlink(db: Database, target: string, path: string, now: () => n
       leafName,
       inode,
     );
+    publishChange(db, { op: "create", path: canonical });
   });
 }

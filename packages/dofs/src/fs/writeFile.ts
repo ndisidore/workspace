@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { createWorkspaceError } from "../errors.js";
+import { publishChange } from "../events.js";
 import { canonicalizePath } from "../path.js";
 import { incrementRev } from "../rev.js";
 import { ROOT_INODE } from "../schema/index.js";
@@ -252,6 +253,7 @@ async function writeFileStreaming(
       manifestHash,
       inode,
     );
+    publishChange(db, { op: existing !== undefined ? "modify" : "create", path: canonical });
   });
 }
 
@@ -482,6 +484,7 @@ export function createFileSync(
       leafName,
       row.inode,
     );
+    publishChange(db, { op: "create", path: canonical });
   });
 }
 
@@ -593,6 +596,7 @@ export function releaseWriteBufferSync(db: Database, path: string, now: () => nu
         rev,
         node.inode,
       );
+      publishChange(db, { op: "modify", path: canonical });
       return;
     }
     applyChunkedInodeUpdate(
@@ -604,6 +608,7 @@ export function releaseWriteBufferSync(db: Database, path: string, now: () => nu
       (_idx, start, end) => start < entry.size && end > 0,
       (_idx, start, end) => buffered.subarray(start, Math.min(end, entry.size)),
     );
+    publishChange(db, { op: "modify", path: canonical });
   });
 
   deleteWriteBuffer(db, node.inode);
@@ -680,6 +685,7 @@ function commitPendingBuffer(db: Database, entry: WriteBufferEntry, now: () => n
         }
       }
       realInode = row.inode;
+      publishChange(db, { op: "create", path: canonicalPath });
     });
   } catch (error) {
     // Transaction rolled back; drop the buffer so the next caller
@@ -816,6 +822,7 @@ export function writeRangeSync(
         return chunkBytes;
       },
     );
+    publishChange(db, { op: "modify", path: canonical });
   });
 
   return bytes.byteLength;
@@ -874,6 +881,7 @@ export function truncateFileSync(
         rev,
         inode,
       );
+      publishChange(db, { op: "modify", path: canonical });
       return;
     }
 
@@ -890,6 +898,7 @@ export function truncateFileSync(
         return chunkBytes;
       },
     );
+    publishChange(db, { op: "modify", path: canonical });
   });
 }
 
@@ -968,6 +977,7 @@ export function writeFileSync(
       manifestHash,
       inode,
     );
+    publishChange(db, { op: existing !== undefined ? "modify" : "create", path: canonical });
   });
 }
 
@@ -1049,5 +1059,6 @@ export function writeFileRangesSync(
       manifestHash,
       inode,
     );
+    publishChange(db, { op: existing !== undefined ? "modify" : "create", path: canonical });
   });
 }

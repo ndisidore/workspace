@@ -1,4 +1,5 @@
 import { createWorkspaceError } from "../errors.js";
+import { publishChange } from "../events.js";
 import { canonicalizePath } from "../path.js";
 import { incrementRev } from "../rev.js";
 import { ROOT_INODE } from "../schema/index.js";
@@ -95,6 +96,7 @@ export function mkdir(db: Database, path: string, options: MkdirOptions, now: ()
           throw createWorkspaceError("ENOENT", `parent directory missing: ${canonical}`, canonical);
         }
         parentInode = createDir(db, parentInode, name, 0o755, mtime, rev);
+        publishChange(db, { op: "create", path: `/${parts.slice(0, i + 1).join("/")}` });
         continue;
       }
       if (existing.type !== "dir") {
@@ -121,5 +123,6 @@ export function mkdir(db: Database, path: string, options: MkdirOptions, now: ()
     }
 
     createDir(db, parentInode, leafName, mode, mtime, rev);
+    publishChange(db, { op: "create", path: canonical });
   });
 }

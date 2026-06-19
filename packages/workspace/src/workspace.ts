@@ -11,10 +11,13 @@
 
 import {
   type ApplyResult,
+  type ChangeListener,
   Database,
   type DurableObjectStorageLike,
   initializeSchema,
   SQLiteWorkspaceProvider,
+  type SubscribeChangesOptions,
+  subscribeChanges,
   WorkspaceFilesystem,
 } from "@cloudflare/dofs";
 import { pullOnce, pushOnce, reconcileWatermarks } from "@cloudflare/workspace-rpc/driver";
@@ -358,6 +361,28 @@ export class Workspace {
   // resources itself; it just delegates back to this workspace.
   stub(): WorkspaceStub {
     return new WorkspaceStub(this);
+  }
+
+  // Subscribe to push-based file change events on the local store.
+  // The listener receives batches of ChangeEvents (create / modify /
+  // chmod / rename / delete, plus subtree / resync markers). Returns
+  // an unsubscribe function.
+  //
+  // This observes every mutation to the local store, whether it
+  // originates here (Workspace.fs writes) or arrives from a backend
+  // through Workspace.pull. The apply path publishes events both from
+  // the fs primitives it reuses and from its own structural surgery
+  // (an upstream directory mode change, or the subtree removal that
+  // precedes a type-changing replacement). It is the host-side hook
+  // for driving UI refreshes or secondary work without polling.
+  //
+  // Delivery is best-effort and in-incarnation only: subscriptions do
+  // not survive Durable Object hibernation, and a `resync` marker (or
+  // a fresh subscription after eviction) means the consumer should
+  // re-read or re-pull from its last-seen rev. See @cloudflare/dofs
+  // `subscribeChanges` for the options and the full contract.
+  watchChanges(listener: ChangeListener, options?: SubscribeChangesOptions): () => void {
+    return subscribeChanges(this.#db, listener, options);
   }
 
   // Sync the local store with a configured backend.
