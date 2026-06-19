@@ -92,6 +92,16 @@ a fresh capnweb session against the same in-memory VFS on the
 container side. If the container died too (e.g. host OOM took both),
 the next sync round is a rev-0 baseline rebuild from the DO's store.
 
+Change-event subscriptions (`Workspace.watchChanges`, `subscribeChanges`,
+and `SyncRPC.watchChanges`) are **in-memory and per-incarnation** — they
+are not in the table above and do not survive eviction or hibernation.
+This is by design: delivery is best-effort, and the durable `rev`
+substrate plus `fetchChanges` is the source of truth. A consumer that was
+subscribed across an incarnation boundary re-subscribes on the next
+incarnation and reconciles from its last-seen `rev` — the same `resync`
+recovery routine it already runs for buffer overflow. See
+[04. Filesystem Interface → Change events](./04_filesystem_interface.md#change-events).
+
 ### Wake triggers
 
 A hibernated or evicted DO is re-instantiated by **any inbound event**:

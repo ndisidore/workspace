@@ -435,6 +435,24 @@ ignored entries should be representable to the DO at all (as stubs, as
 a separate shell-only namespace, or not at all) is left to a future
 iteration — see [Future considerations](#future-considerations).
 
+## Change events
+
+A separate, push-based **change-event** stream rides on the same `rev`
+substrate described here. Every mutation already stamps `vfs_nodes.rev`
+and appends tombstones to `vfs_changes`; change events are emitted from
+those same transaction boundaries and carry the `rev` they were stamped
+at. The full consumer-facing API (`Workspace.watchChanges`,
+`subscribeChanges`, `SyncRPC.watchChanges`) is documented under
+[04. Filesystem Interface → Change events](./04_filesystem_interface.md#change-events).
+
+The relationship to this protocol matters in one place: delivery is
+best-effort, so when the live stream drops events (a burst overflow, a
+slow consumer, or a reconnect after hibernation) it emits a `resync`
+marker. That marker routes the consumer straight back to `fetchChanges`
+from its last-seen `rev` for an authoritative catch-up — push for
+liveness, `fetchChanges` for completeness. Change events never replace
+the pull path; they layer on top of it.
+
 ## Future considerations
 
 Items deferred from the initial design. File an issue if a real use

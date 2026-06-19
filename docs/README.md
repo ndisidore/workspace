@@ -223,7 +223,7 @@ above, then dive into the area you're working on.
 | [01. VFS](./01_vfs.md) | Layout of the workspace tree, reserved paths, and mount points. |
 | [02. Sync Protocol](./02_sync_protocol.md) | How the DO-backed VFS synchronises with the sandbox container. |
 | [03. Filesystem Schema](./03_filesystem_schema.md) | SQLite schema backing the virtual filesystem. |
-| [04. Filesystem Interface](./04_filesystem_interface.md) | `Workspace.fs` API: `readFile`, `writeFile`, `mkdir`, `grep`, etc. |
+| [04. Filesystem Interface](./04_filesystem_interface.md) | `Workspace.fs` API: `readFile`, `writeFile`, `mkdir`, `grep`, etc., plus push-based change events via `watchChanges`. |
 | [05. Shell Interface](./05_shell_interface.md) | `Workspace.shell.exec` and streamed command execution. |
 | [06. Mount Interface](./06_mount_interface.md) | Pre-filling paths from R2, Artifacts, GitHub, and custom sources. **(not yet implemented)** |
 | [07. Injected Service](./07_injected_service.md) | The in-container `wsd` service that backs FUSE and shell. |
@@ -243,6 +243,8 @@ interface Workspace {
   fs:    WorkspaceFilesystem;     // 04_filesystem_interface.md
   shell: WorkspaceShell;          // 05_shell_interface.md, throws when no backend is configured
 
+  /** Subscribe to push-based file change events on the local store. See 04_filesystem_interface.md → Change events. */
+  watchChanges(listener: ChangeListener, options?: SubscribeChangesOptions): () => void;
   /** Push pending DO-side writes to the configured backend. Resolves with the entry count. */
   push():  Promise<number>;
   /** Pull backend-side writes back into the DO. Resolves with { applied, skipped }. */

@@ -102,6 +102,24 @@ interface SyncRPC {
   // interactive readers.
   readEntry(path: string): Promise<ChangeEntry | null>;
 
+  // Container ← DO. Subscribe to a long-lived, push-based stream of
+  // file change events: batches of ChangeEvent (create / modify /
+  // chmod / rename / delete), plus `subtree` markers when the caller
+  // opts into coalesceDirs and a `resync` marker when the server's
+  // per-subscriber buffer overflows. ChangeEvent is the lean,
+  // consumer-facing shape (no chunk hashes) — distinct from the
+  // sync-wire ChangeEntry above. Best-effort and scoped to the
+  // current incarnation; the caller owns the result envelope and
+  // disposes it (cancelling the stream unsubscribes server-side).
+  watchChanges(input?: {
+    path?:              string;
+    recursive?:         boolean;
+    ignore?:            string[];
+    coalesceDirs?:      string[];
+    window?:            number;
+    maxBufferedEvents?: number;
+  }): Promise<{ stream: ReadableStream<ChangeEvent[]> }>;
+
   // Git's `have` line, batched. Returns the subset of the input
   // the receiver already holds.
   hasObjects(hashes: Uint8Array[]): Promise<Uint8Array[]>;
@@ -130,6 +148,15 @@ changes are hard wire breaks and require lockstep rollout.
 
 `ChangeEntry` is defined in `packages/dofs/src/sync/changes.ts`. Schema
 column references match [03. Filesystem Schema](./03_filesystem_schema.md).
+
+`watchChanges` is the wire face of the change-event surface; `ChangeEvent`
+is defined in `packages/dofs/src/events.ts`. It is a *push* complement to
+the *pull*-based `fetchChanges`: low-latency notifications for the common
+case, with the `resync` marker handing the consumer back to `fetchChanges`
+whenever the live stream drops events. Full semantics — the event model,
+scoping/`coalesceDirs`/`ignore` options, batching, overflow, and the
+`resync` recovery routine — are in
+[04. Filesystem Interface → Change events](./04_filesystem_interface.md#change-events).
 
 #### Rev-0 baseline (no separate snapshot)
 
@@ -244,8 +271,8 @@ the push/fetch cycle.
 `exec` start, `killExec`, `disposeExec`) against a single Workspace
 will be serialised through a FIFO queue so that concurrent peers can't
 interleave half-applied batches. Read-only calls (`fetchChanges`,
-`fetchObjects`, `hasObjects`, `currentRev`, `watermarks`, `readEntry`,
-`getExec`) bypass the queue.
+`watchChanges`, `fetchObjects`, `hasObjects`, `currentRev`, `watermarks`,
+`readEntry`, `getExec`) bypass the queue.
 
 ## Backpressure on the exec stream
 
