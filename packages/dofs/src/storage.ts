@@ -58,6 +58,15 @@ export class Database {
     };
   }
 
+  // True while a transactionSync closure is on the stack. The resolve
+  // cache uses this to refuse populating entries mid-transaction, so a
+  // rolled-back mutation can never leave the cache reflecting
+  // uncommitted state. (Invalidation still runs freely inside a
+  // transaction — dropping an entry is always safe.)
+  get inTransaction(): boolean {
+    return this.#txDepth > 0;
+  }
+
   run(query: string, ...bindings: unknown[]): void {
     this.sql.exec(query, ...bindings);
   }
